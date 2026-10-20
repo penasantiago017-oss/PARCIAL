@@ -1,0 +1,270 @@
+CODIGO 
+
+import sqlite3
+import sys
+
+DB_NAME = "tienda_electronica.db"
+
+def obtener_conexion():
+    """Establece y devuelve una conexión a la base de datos SQLite."""
+    conexion = sqlite3.connect(DB_NAME)
+    conexion.execute("PRAGMA foreign_keys = ON;")
+    return conexion
+
+def inicializar_base_datos():
+    """Crea automáticamente las tablas si no existen."""
+    with obtener_conexion() as conexion:
+        cursor = conexion.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS productos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                precio REAL NOT NULL,
+                cantidad INTEGER NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ventas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                producto_id INTEGER NOT NULL,
+                cantidad_vendida INTEGER NOT NULL,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (producto_id) REFERENCES productos(id)
+            )
+        """)
+        conexion.commit()
+
+
+def registrar_producto():
+    print("\n--- Registrar Nuevo Producto ---")
+    nombre = input("Nombre del componente: ").strip()
+    try:
+        precio = float(input("Precio unitario ($): "))
+        cantidad = int(input("Cantidad inicial en stock: "))
+        
+        if precio < 0 or cantidad < 0:
+            print("Error: El precio y la cantidad no pueden ser negativos.")
+            return
+
+        with obtener_conexion() as conexion:
+            cursor = conexion.cursor()
+            cursor.execute(
+                "INSERT INTO productos (nombre, precio, cantidad) VALUES (?, ?, ?)",
+                (nombre, precio, cantidad)
+            )
+            conexion.commit()
+        print(f"Producto '{nombre}' registrado exitosamente.")
+    except ValueError:
+        print("Error: Ingrese valores numéricos válidos para el precio y la cantidad.")
+
+def consultar_productos():
+    print("\n--- Inventario de Productos ---")
+    with obtener_conexion() as conexion:
+        cursor = conexion.cursor()
+        cursor.execute("SELECT id, nombre, precio, cantidad FROM productos")
+        productos = cursor.fetchall()
+        
+        if not productos:
+            print("No hay productos registrados en el inventario.")
+            return
+
+        print(f"{'ID':<4} | {'Nombre':<25} | {'Precio':<10} | {'Stock':<6}")
+        print("-" * 55)
+        for p in productos:
+            print(f"{p[0]:<4} | {p[1]:<25} | ${p[2]:<9.2f} | {p[3]:<6}")
+
+def actualizar_producto():
+    consultar_productos()
+    print("\n--- Actualizar Producto ---")
+    try:
+        prod_id = int(input("Ingrese el ID del producto a actualizar: "))
+        
+        with obtener_conexion() as conexion:
+            cursor = conexion.cursor()
+            cursor.execute("SELECT id, nombre, precio, cantidad FROM productos WHERE id = ?", (prod_id,))
+            producto = cursor.fetchone()
+            
+            if not producto:
+                print("Error: El producto con ese ID no existe.")
+                return
+
+            print(f"Actualizando a: {producto[1]} (Precio actual: ${producto[2]}, Stock: {producto[3]})")
+            nuevo_precio = input("Nuevo precio (deje en blanco para no cambiar): ").strip()
+            nueva_cantidad = input("Nueva cantidad (deje en blanco para no cambiar): ").strip()
+
+            precio = float(nuevo_precio) if nuevo_precio else producto[2]
+            cantidad = int(nueva_cantidad) if nueva_cantidad else producto[3]
+
+            cursor.execute(
+                "UPDATE productos SET precio = ?, cantidad = ? WHERE id = ?",
+                (precio, cantidad, prod_id)
+            )
+            conexion.commit()
+            print("Producto actualizado correctamente.")
+    except ValueError:
+        print("Error: Entrada inválida.")
+
+def eliminar_producto():
+    consultar_productos()
+    print("\n--- Eliminar Producto ---")
+    try:
+        prod_id = int(input("Ingrese el ID del producto a eliminar: "))
+        with obtener_conexion() as conexion:
+            cursor = conexion.cursor()
+            cursor.execute("SELECT COUNT(*) FROM ventas WHERE producto_id = ?", (prod_id,))
+            ventas_asociadas = cursor.fetchone()[0]
+
+            if ventas_asociadas > 0:
+                print("No se puede eliminar el producto porque tiene un historial de ventas asociado (Integridad Referencial).")
+                return
+
+            cursor.execute("DELETE FROM productos WHERE id = ?", (prod_id,))
+            if cursor.rowcount > 0:
+                conexion.commit()
+                print("Producto eliminado exitosamente.")
+            else:
+                print("Producto no encontrado.")
+    except ValueError:
+        print("Error: ID inválido.")
+
+def registrar_venta():
+    consultar_productos()
+    print("\n--- Registrar Venta (Transacción) ---")
+    try:
+        prod_id = int(input("ID del producto a vender: "))
+        cant_venta = int(input("Cantidad a vender: "))
+
+        if cant_venta <= 0:
+            print("La cantidad debe ser mayor a cero.")
+            return
+
+        conexion = obtener_conexion()
+        cursor = conexion.cursor()
+
+        try:
+            cursor.execute("SELECT cantidad, precio FROM productos WHERE id = ?", (prod_id,))
+            resultado = cursor.fetchone()
+
+            if not resultado:
+                raise Exception("El producto especificado no existe.")
+
+            stock_actual, precio_unitario = resultado
+
+            if stock_actual < cant_venta:
+                raise Exception(f"Stock insuficiente. Stock disponible: {stock_actual}, Solicitado: {cant_venta}")
+
+            cursor.execute(
+                "INSERT INTO ventas (producto_id, cantidad_vendida) VALUES (?, ?)",
+                (prod_id, cant_venta)
+            )
+
+            nuevo_stock = stock_actual - cant_venta
+            cursor.execute(
+                "UPDATE productos SET cantidad = ? WHERE id = ?",
+                (nuevo_stock, prod_id)
+            )
+
+            conexion.commit()
+            print(f"Venta registrada con éxito. Total a pagar: ${precio_unitario * cant_venta:.2f}")
+
+        except Exception as e:
+            # Si ocurre cualquier error, revertimos todo
+            conexion.rollback()
+            print(f"Transacción fallida y revertida (Rollback ejecutado). Motivo: {e}")
+        finally:
+            conexion.close()
+
+    except ValueError:
+        print("Error: Ingrese valores numéricos válidos.")
+
+def mostrar_historial_ventas():
+    print("\n--- Historial de Ventas (JOIN) ---")
+    with obtener_conexion() as conexion:
+        cursor = conexion.cursor()
+        cursor.execute("""
+            SELECT v.id, p.nombre, v.cantidad_vendida, (v.cantidad_vendida * p.precio) AS total, v.fecha
+            FROM ventas v
+            JOIN productos p ON v.producto_id = p.id
+        """)
+        ventas = cursor.fetchall()
+
+        if not ventas:
+            print("No hay ventas registradas.")
+            return
+
+        print(f"{'ID Venta':<8} | {'Producto':<20} | {'Cant':<6} | {'Total':<10} | {'Fecha'}")
+        print("-" * 65)
+        for v in ventas:
+            print(f"{v[0]:<8} | {v[1]:<20} | {v[2]:<6} | ${v[3]:<9.2f} | {v[4]}")
+
+def probar_rollback_forzado():
+    print("\n--- DEMOSTRACIÓN DE ERROR CONTROLADO Y ROLLBACK ---")
+    print("Intentaremos registrar una venta con un ID de producto ficticio (ej. 9999) para forzar un error.")
+    
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+
+    try:
+        prod_id_falso = 9999
+        cant_venta = 2
+
+        print("1. Intentando insertar una venta para un producto inexistente...")
+        cursor.execute(
+            "INSERT INTO ventas (producto_id, cantidad_vendida) VALUES (?, ?)",
+            (prod_id_falso, cant_venta)
+        )
+
+        cursor.execute("SELECT cantidad FROM productos WHERE id = ?", (prod_id_falso,))
+        res = cursor.fetchone()
+        if not res:
+            raise Exception("Simulación de fallo posterior al registro de venta: Producto no encontrado.")
+
+        conexion.commit()
+    except Exception as e:
+        print(f"Error capturado exitosamente: {e}")
+        print("Ejecutando conexion.rollback()...")
+        conexion.rollback()
+        print("Verificacion: Ninguna venta parcial ni cambio inconsistente fue guardado en la base de datos.")
+    finally:
+        conexion.close()
+
+
+def main():
+    inicializar_base_datos()
+    while True:
+        print("\n========================================")
+        print("   SISTEMA DE INVENTARIO Y VENTAS - TIENDA")
+        print("========================================")
+        print("1. Registrar producto")
+        print("2. Consultar todos los productos")
+        print("3. Actualizar producto")
+        print("4. Eliminar producto")
+        print("5. Registrar una venta")
+        print("6. Mostrar historial de ventas (JOIN)")
+        print("7. Probar error controlado y Rollback (Reto)")
+        print("8. Salir")
+        
+        opcion = input("\nSeleccione una opcion (1-8): ").strip()
+
+        if opcion == "1":
+            registrar_producto()
+        elif opcion == "2":
+            consultar_productos()
+        elif opcion == "3":
+            actualizar_producto()
+        elif opcion == "4":
+            eliminar_producto()
+        elif opcion == "5":
+            registrar_venta()
+        elif opcion == "6":
+            mostrar_historial_ventas()
+        elif opcion == "7":
+            probar_rollback_forzado()
+        elif opcion == "8":
+            print("\n¡Gracias por usar el sistema! Saliendo...")
+            sys.exit()
+        else:
+            print("Opcion inválida. Por favor, ingrese un número del 1 al 8.")
+
+if __name__ == "__main__":
+    main()
