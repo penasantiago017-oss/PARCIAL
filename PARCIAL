@@ -1,1 +1,76 @@
+2. Actividades
+Parte 1. Análisis y diseño (20 puntos)
+Antes de programar:
+
+1.	Identifica las entidades y atributos necesarios.
+
+Para resolver este sistema de inventario y ventas, utilizaremos dos entidades principales relacionadas entre sí:
+
+productos (Inventario):
+
+id (INTEGER, Primary Key, Auto-incremental): Identificador único del producto.
+
+nombre (TEXT, Not Null): Nombre del componente electrónico.
+
+precio (REAL, Not Null): Precio unitario de venta.
+
+cantidad (INTEGER, Not Null): Unidades disponibles en stock.
+
+ventas (Historial de transacciones):
+
+id (INTEGER, Primary Key, Auto-incremental): Identificador único de la venta.
+
+producto_id (INTEGER, Foreign Key): Referencia al producto vendido (productos.id).
+
+cantidad_vendida (INTEGER, Not Null): Unidades que se despacharon en esta venta.
+
+fecha (TIMESTAMP/TEXT): Fecha y hora en que se realizó la venta.
+
+
+
+
+2.	Diseña una base de datos con al menos dos tablas relacionadas mediante una clave foránea.
+
+CREATE TABLE IF NOT EXISTS productos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    precio REAL NOT NULL,
+    cantidad INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ventas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    producto_id INTEGER NOT NULL,
+    cantidad_vendida INTEGER NOT NULL,
+    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (producto_id) REFERENCES productos(id)
+);
+
+3.	Dibuja un diagrama sencillo que represente cómo interactúan el usuario, Python y SQLite.
+
++---------+        Interacción (Menú Consola)        +-------------------+
+ | Usuario | <-------------------------------------> | Aplicación Python |
+ +---------+                                         +-------------------+
+                                                        |  ^
+                                                        |  | Consultas SQL
+                                                        |  | Parametrizadas
+                                                        v  | (sqlite3)
+                                                     +-------------------+
+                                                     |  Base de Datos    |
+                                                     |    SQLite (.db)   |
+                                                     +-------------------+
+
+4.	Explica qué operaciones deben ejecutarse al registrar una venta.
+
+Para garantizar la atomicidad e integridad de los datos, al registrar una venta se ejecutan en orden lógico las siguientes tareas dentro de una transacción:
+
+Validar existencia: Comprobar mediante una consulta si el producto_id existe en la base de datos.
+
+Validar stock: Verificar que la cantidad solicitada sea menor o igual a las unidades disponibles (cantidad >= cantidad_vendida).
+
+Insertar venta: Registrar la transacción en la tabla ventas.
+
+Actualizar inventario: Descontar las unidades vendidas del stock actual en la tabla productos.
+
+Confirmar (commit()): Si todo sale bien, se guardan los cambios permanentemente. Si ocurre un fallo en el paso 3 o 4, se ejecuta un rollback() para evitar inconsistencias.
 
